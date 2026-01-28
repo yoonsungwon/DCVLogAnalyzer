@@ -1,0 +1,5 @@
+{
+  "serverLogs": ["./DCV_Serverlog/server.log*"],
+  "agentLogs": ["./DCV_Serverlog/agent.log*"],
+  "clientLogs": ["./DCV_ClientLog/*_client_*.log"]
+}

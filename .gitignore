@@ -1,0 +1,8 @@
+# DCV Log files (exclude from git)
+DCV_ClientLog/
+DCV_ServerLog/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

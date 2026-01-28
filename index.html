@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DCV 지연 분석기 | Latency Analyzer</title>
+    <meta name="description" content="DCV 로그 파일에서 지연 문제를 자동 감지하고 시각화하는 분석 도구">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">📊</span>
+                <h1>DCV 지연 분석기</h1>
+            </div>
+            <p class="subtitle">Latency Issue Detector</p>
+        </header>
+
+        <!-- Input Section -->
+        <section class="input-section">
+            <div class="input-tabs">
+                <button class="tab-btn active" data-tab="upload">파일 업로드</button>
+                <button class="tab-btn" data-tab="config">설정파일 로드</button>
+            </div>
+
+            <!-- File Upload Tab -->
+            <div class="tab-content active" id="upload-tab">
+                <div class="drop-zone" id="dropZone">
+                    <div class="drop-zone-content">
+                        <span class="drop-icon">📁</span>
+                        <p class="drop-text">로그 파일을 여기에 드래그하거나 클릭하세요</p>
+                        <p class="drop-hint">server.log, agent.log, *_client_*.log 지원</p>
+                    </div>
+                    <input type="file" id="fileInput" multiple accept=".log,.txt" hidden>
+                </div>
+            </div>
+
+            <!-- Config File Tab -->
+            <div class="tab-content" id="config-tab">
+                <div class="config-input">
+                    <label for="configFile">설정파일 (JSON) 선택:</label>
+                    <input type="file" id="configFile" accept=".json">
+                    <p class="config-hint">와일드카드 패턴 지원: server.log*, *_client_*.log</p>
+                </div>
+                <div class="config-example">
+                    <p>설정파일 예시:</p>
+                    <pre>{
+  "serverLogs": ["./DCV_Serverlog/server.log*"],
+  "agentLogs": ["./DCV_Serverlog/agent.log*"],
+  "clientLogs": ["./DCV_ClientLog/*_client_*.log"]
+}</pre>
+                </div>
+            </div>
+
+            <!-- Loaded Files List -->
+            <div class="files-list" id="filesList"></div>
+
+            <button class="analyze-btn" id="analyzeBtn" disabled>
+                <span class="btn-icon">🔍</span>
+                분석 시작
+            </button>
+        </section>
+
+        <!-- Results Section -->
+        <section class="results-section" id="resultsSection" style="display: none;">
+            <!-- Summary Cards -->
+            <div class="summary-cards">
+                <div class="card card-rtt">
+                    <h3>RTT (Round-Trip Time)</h3>
+                    <div class="card-stats">
+                        <div class="stat">
+                            <span class="stat-label">평균</span>
+                            <span class="stat-value" id="rttAvg">-</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">최대</span>
+                            <span class="stat-value" id="rttMax">-</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">이상치</span>
+                            <span class="stat-value" id="rttAnomalies">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card card-fps">
+                    <h3>FPS / 대역폭</h3>
+                    <div class="card-stats">
+                        <div class="stat">
+                            <span class="stat-label">평균 FPS</span>
+                            <span class="stat-value" id="fpsAvg">-</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">평균 대역폭</span>
+                            <span class="stat-value" id="bwAvg">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card card-network">
+                    <h3>네트워크 상태</h3>
+                    <div class="card-stats">
+                        <div class="stat">
+                            <span class="stat-label">Overuse</span>
+                            <span class="stat-value" id="netOveruse">-</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">패킷 손실</span>
+                            <span class="stat-value" id="packetLoss">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card card-issues">
+                    <h3>감지된 이슈</h3>
+                    <div class="card-stats">
+                        <div class="stat">
+                            <span class="stat-label warning">⚠️ Warning</span>
+                            <span class="stat-value" id="issueWarning">-</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label critical">🔴 Critical</span>
+                            <span class="stat-value" id="issueCritical">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts - Tabbed by Log Type -->
+            <div class="charts-section">
+                <div class="chart-tabs">
+                    <button class="chart-tab-btn active" data-chart-tab="server">🖥️ Server 지표</button>
+                    <button class="chart-tab-btn" data-chart-tab="agent">⚙️ Agent 지표</button>
+                    <button class="chart-tab-btn" data-chart-tab="client">💻 Client 지표</button>
+                </div>
+
+                <!-- Server Charts -->
+                <div class="chart-tab-content active" id="server-charts">
+                    <h2 class="section-title">Server Log 지표 (QUIC Transport)</h2>
+                    <div class="charts-grid">
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>🔄 RTT (Round-Trip Time)</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('serverRtt')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="serverRttChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>📦 패킷 송수신</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('serverPackets')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="serverPacketsChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>📊 CWND Size</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('serverCwnd')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="serverCwndChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>🚀 Delivery Rate</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('serverDelivery')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="serverDeliveryChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>📤 Stream Sent (Bytes)</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('serverStreamSent')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="serverStreamSentChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>📥 Stream Recv (Bytes)</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('serverStreamRecv')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="serverStreamRecvChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Agent Charts -->
+                <div class="chart-tab-content" id="agent-charts">
+                    <h2 class="section-title">Agent Log 지표 (Congestion Control)</h2>
+                    <div class="charts-grid">
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>🌐 Network State</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('agentNetState')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="agentNetStateChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>📶 Bitrate (Mbps)</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('agentBitrate')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="agentBitrateChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>📉 UDP 패킷 손실</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('agentUdp')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="agentUdpChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>⏱️ Kalman Filter Delay</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('agentKalman')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="agentKalmanChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>🎨 Display Quality</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('agentQuality')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="agentQualityChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>💾 Encoder Output (Bytes)</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('agentEncoder')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="agentEncoderChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Client Charts -->
+                <div class="chart-tab-content" id="client-charts">
+                    <h2 class="section-title">Client Log 지표 (Performance)</h2>
+                    <div class="charts-grid">
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>🎬 FPS</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('clientFps')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="clientFpsChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>📡 Network Latency</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('clientLatency')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="clientLatencyChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <h3>📊 Bandwidth (Kbps)</h3>
+                                <button class="zoom-reset-btn" onclick="resetZoom('clientBandwidth')" title="줌 초기화">🔍
+                                    Reset</button>
+                            </div>
+                            <canvas id="clientBandwidthChart"></canvas>
+                            <p class="chart-hint">드래그: 확대 | Ctrl+휠: 축소</p>
+                        </div>
+                        <div class="chart-container">
+                            <h3>📊 네트워크 상태 요약</h3>
+                            <canvas id="networkSummaryChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Issues Timeline -->
+            <div class="issues-timeline">
+                <h3>📋 이슈 타임라인</h3>
+                <div class="timeline-list" id="timelineList"></div>
+            </div>
+        </section>
+
+        <!-- Loading Overlay -->
+        <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+            <div class="loading-spinner"></div>
+            <p>로그 분석 중...</p>
+        </div>
+    </div>
+
+    <script src="analyzer.js"></script>
+</body>
+
+</html>
